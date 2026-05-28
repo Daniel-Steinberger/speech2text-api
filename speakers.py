@@ -1,9 +1,11 @@
 """Speaker-Embeddings: Enrollment, Persistenz, Matching."""
 from __future__ import annotations
 
+import io
 import sqlite3
+import subprocess
 import uuid
-from collections.abc import Iterable
+import wave
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -32,6 +34,7 @@ CREATE TABLE IF NOT EXISTS pending_clusters (
     cluster_label TEXT NOT NULL,
     vector BLOB NOT NULL,
     matched_name TEXT,
+    audio_sample BLOB,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (session_id, cluster_label)
 );
@@ -45,6 +48,37 @@ def _vec_to_blob(v: np.ndarray) -> bytes:
 
 def _blob_to_vec(b: bytes) -> np.ndarray:
     return np.frombuffer(b, dtype=np.float32)
+
+
+def to_wav_bytes(audio_np: np.ndarray, sample_rate: int = 16000) -> bytes:
+    """Mono float32 [-1,1] -> 16-bit PCM WAV."""
+    pcm = np.clip(audio_np, -1.0, 1.0)
+    pcm = (pcm * 32767.0).astype(np.int16).tobytes()
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sample_rate)
+        w.writeframes(pcm)
+    return buf.getvalue()
+
+
+def to_opus_bytes(audio_np: np.ndarray, sample_rate: int = 16000, bitrate_kbps: int = 24) -> bytes:
+    """Mono float32 -> Opus in Ogg-Container (für Sprache ~24 kbps optimal)."""
+    wav = to_wav_bytes(audio_np, sample_rate)
+    proc = subprocess.run(
+        [
+            "ffmpeg", "-loglevel", "error", "-y",
+            "-f", "wav", "-i", "pipe:0",
+            "-c:a", "libopus", "-b:a", f"{bitrate_kbps}k",
+            "-application", "voip",
+            "-f", "ogg", "pipe:1",
+        ],
+        input=wav,
+        capture_output=True,
+        check=True,
+    )
+    return proc.stdout
 
 
 def _cosine(a: np.ndarray, b: np.ndarray) -> float:
@@ -71,7 +105,7 @@ class EmbeddingExtractor:
         emb = self.inference({"waveform": waveform, "sample_rate": sample_rate})
         return np.asarray(emb, dtype=np.float32).reshape(-1)
 
-    def per_speaker(
+    def per_speaker_chunks(
         self,
         audio_np: np.ndarray,
         segments: list[dict],
@@ -79,7 +113,7 @@ class EmbeddingExtractor:
         min_seconds: float = 1.5,
         max_seconds: float = 30.0,
     ) -> dict[str, np.ndarray]:
-        """Sammelt pro Sprecher-Label dessen Audio-Anteile, gibt Embedding pro Cluster."""
+        """Sammelt pro Sprecher-Label dessen Audio-Anteile (concat, gecappt)."""
         chunks: dict[str, list[np.ndarray]] = {}
         for seg in segments:
             spk = seg.get("speaker")
@@ -100,8 +134,22 @@ class EmbeddingExtractor:
                 continue
             if len(concat) > max_samples:
                 concat = concat[:max_samples]
-            out[spk] = self.extract(concat, sample_rate)
+            out[spk] = concat
         return out
+
+    def per_speaker(
+        self,
+        audio_np: np.ndarray,
+        segments: list[dict],
+        sample_rate: int = SAMPLE_RATE,
+        min_seconds: float = 1.5,
+        max_seconds: float = 30.0,
+    ) -> dict[str, np.ndarray]:
+        """Convenience: Embedding pro Sprecher (ohne Audio-Chunks zurückzugeben)."""
+        chunks = self.per_speaker_chunks(
+            audio_np, segments, sample_rate, min_seconds, max_seconds
+        )
+        return {spk: self.extract(c, sample_rate) for spk, c in chunks.items()}
 
 
 class SpeakerStore:
@@ -109,6 +157,13 @@ class SpeakerStore:
         self.db_path = str(db_path)
         with self._conn() as c:
             c.executescript(_SCHEMA)
+            self._migrate(c)
+
+    @staticmethod
+    def _migrate(c: sqlite3.Connection) -> None:
+        cols = {row[1] for row in c.execute("PRAGMA table_info(pending_clusters)")}
+        if "audio_sample" not in cols:
+            c.execute("ALTER TABLE pending_clusters ADD COLUMN audio_sample BLOB")
 
     @contextmanager
     def _conn(self):
@@ -183,14 +238,26 @@ class SpeakerStore:
         session_id: str,
         clusters: dict[str, np.ndarray],
         matched: dict[str, str | None],
+        audio: dict[str, bytes] | None = None,
     ) -> None:
+        audio = audio or {}
         with self._conn() as c:
             for label, vec in clusters.items():
                 c.execute(
                     "INSERT OR REPLACE INTO pending_clusters"
-                    "(session_id, cluster_label, vector, matched_name) VALUES (?, ?, ?, ?)",
-                    (session_id, label, _vec_to_blob(vec), matched.get(label)),
+                    "(session_id, cluster_label, vector, matched_name, audio_sample) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (session_id, label, _vec_to_blob(vec), matched.get(label), audio.get(label)),
                 )
+
+    def get_pending_audio(self, session_id: str, cluster_label: str) -> bytes | None:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT audio_sample FROM pending_clusters "
+                "WHERE session_id = ? AND cluster_label = ?",
+                (session_id, cluster_label),
+            ).fetchone()
+        return row[0] if row and row[0] else None
 
     def assign_session(self, session_id: str, mapping: dict[str, str]) -> dict[str, str]:
         """Mapping {cluster_label: name} -> persistiert die Cluster-Embeddings unter den Namen."""
@@ -224,13 +291,18 @@ class SpeakerStore:
         where = "WHERE matched_name IS NULL" if unassigned_only else ""
         with self._conn() as c:
             rows = c.execute(
-                f"SELECT session_id, cluster_label, matched_name, created_at "
+                f"SELECT session_id, cluster_label, matched_name, created_at, "
+                f"  (audio_sample IS NOT NULL) AS has_audio "
                 f"FROM pending_clusters {where} ORDER BY created_at DESC, session_id, cluster_label"
             ).fetchall()
         sessions: dict[str, dict] = {}
-        for sid, label, matched, created in rows:
+        for sid, label, matched, created, has_audio in rows:
             s = sessions.setdefault(sid, {"session_id": sid, "created_at": created, "clusters": []})
-            s["clusters"].append({"label": label, "matched_name": matched})
+            s["clusters"].append({
+                "label": label,
+                "matched_name": matched,
+                "has_audio": bool(has_audio),
+            })
         return list(sessions.values())[:limit]
 
     def prune_pending(self, older_than_seconds: int = 7 * 24 * 3600) -> int:

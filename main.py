@@ -13,7 +13,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, Response, UploadFi
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from speakers import EmbeddingExtractor, SpeakerStore, relabel_segments
+from speakers import EmbeddingExtractor, SpeakerStore, relabel_segments, to_opus_bytes
 
 load_dotenv()
 
@@ -179,6 +179,15 @@ def list_pending_sessions(unassigned_only: bool = True, limit: int = 50):
 
 # --- Session-Assignment (nachträglich) ---
 
+@app.get("/sessions/{session_id}/clusters/{cluster_label}/audio")
+def get_cluster_audio(session_id: str, cluster_label: str):
+    store: SpeakerStore = models["store"]
+    blob = store.get_pending_audio(session_id, cluster_label)
+    if not blob:
+        raise HTTPException(404, "Kein Audio-Sample für diesen Cluster vorhanden.")
+    return Response(content=blob, media_type="audio/ogg")
+
+
 @app.post("/sessions/{session_id}/assign")
 def assign_session(session_id: str, mapping: dict[str, str] = Body(...)):
     """Ordnet anonyme Cluster-Labels (z.B. 'SPEAKER_00') Namen zu und speichert deren Embeddings."""
@@ -241,10 +250,13 @@ async def transcribe(
         result = whisperx.assign_word_speakers(diarize_segments, aligned)
         segments = result["segments"]
 
-        # Pro Cluster-Label ein Embedding -> Match gegen DB
+        # Pro Cluster-Label Audio + Embedding -> Match gegen DB
         embed: EmbeddingExtractor = models["embed"]
         store: SpeakerStore = models["store"]
-        cluster_embeddings = embed.per_speaker(audio, segments)
+        cluster_chunks = embed.per_speaker_chunks(audio, segments)
+        cluster_embeddings = {
+            label: embed.extract(chunk) for label, chunk in cluster_chunks.items()
+        }
 
         cluster_to_name: dict[str, str] = {}
         match_info: dict[str, dict] = {}
@@ -254,9 +266,18 @@ async def transcribe(
             if name:
                 cluster_to_name[label] = name
 
-        # Session anlegen und alle Cluster-Embeddings ablegen (für nachträgliche Zuweisung)
+        # Audio-Samples (Opus) für Wiedergabe in der UI – max. 15 s
+        cluster_audio: dict[str, bytes] = {}
+        for label, chunk in cluster_chunks.items():
+            preview = chunk[: 15 * 16000]
+            try:
+                cluster_audio[label] = to_opus_bytes(preview)
+            except Exception as e:  # ffmpeg-Encoding fehlgeschlagen — Sample weglassen
+                print(f"[warn] Opus-Encoding für {label} fehlgeschlagen: {e}")
+
+        # Session anlegen und alle Cluster-Embeddings + Audio ablegen
         session_id = store.new_session()
-        store.store_pending(session_id, cluster_embeddings, cluster_to_name)
+        store.store_pending(session_id, cluster_embeddings, cluster_to_name, audio=cluster_audio)
 
         segments = relabel_segments(segments, cluster_to_name)
 
