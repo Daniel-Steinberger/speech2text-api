@@ -10,7 +10,8 @@ import whisperx
 from whisperx.diarize import DiarizationPipeline
 from dotenv import load_dotenv
 from fastapi import Body, FastAPI, File, Form, HTTPException, Response, UploadFile
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 
 from speakers import EmbeddingExtractor, SpeakerStore, relabel_segments
 
@@ -57,6 +58,14 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="speech2text-api", lifespan=lifespan)
+
+_STATIC_DIR = Path(__file__).parent / "static"
+app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+
+
+@app.get("/", include_in_schema=False)
+def index():
+    return FileResponse(_STATIC_DIR / "index.html")
 
 
 def _format_timestamp(seconds: float) -> str:
@@ -160,6 +169,12 @@ def delete_speaker(name: str):
     if not store.delete_speaker(name):
         raise HTTPException(404, f"Speaker '{name}' nicht gefunden.")
     return {"deleted": name}
+
+
+@app.get("/sessions/pending")
+def list_pending_sessions(unassigned_only: bool = True, limit: int = 50):
+    store: SpeakerStore = models["store"]
+    return {"sessions": store.list_pending(unassigned_only=unassigned_only, limit=limit)}
 
 
 # --- Session-Assignment (nachträglich) ---

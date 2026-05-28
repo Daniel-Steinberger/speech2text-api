@@ -56,7 +56,18 @@ Health-Check:
 curl http://localhost:8000/health
 ```
 
-## Verwendung
+## Web-UI
+
+Unter `http://<host>:8000/` läuft eine schlanke Web-Oberfläche zum:
+
+- Audio hochladen und Transkript anzeigen / kopieren / als `.md` herunterladen
+- Bekannte Sprecher auflisten und löschen
+- Offene Sitzungen (anonyme Cluster aus letzten Transkriptionen) Namen
+  zuweisen — das gespeicherte Embedding wird damit dem Sprecher zugeordnet
+  und beim nächsten Transkribieren wieder erkannt
+- Sprecher manuell per Sample-Upload anlernen
+
+## Verwendung (API)
 
 ### Markdown-Transkript (Default)
 

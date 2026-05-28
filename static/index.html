@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>speech2text-api — Sprecher-Verwaltung</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #181b22;
+    --border: #2a2f3a;
+    --text: #e6e8ee;
+    --muted: #8a93a6;
+    --accent: #5b8def;
+    --danger: #e2574c;
+    --success: #4caf72;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+  header {
+    padding: 1.25rem 2rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  header h1 { margin: 0; font-size: 1.15rem; font-weight: 600; }
+  header .status { font-size: 0.85rem; color: var(--muted); }
+  main { max-width: 980px; margin: 0 auto; padding: 1.5rem 2rem 4rem; }
+  section {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 1.25rem;
+  }
+  section h2 { margin: 0 0 0.75rem; font-size: 1rem; font-weight: 600; }
+  section .desc { color: var(--muted); font-size: 0.85rem; margin-bottom: 1rem; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+  th, td { text-align: left; padding: 0.55rem 0.5rem; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  tr:last-child td { border-bottom: none; }
+  input[type=text], input[type=file] {
+    background: #0c0e13;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 0.45rem 0.6rem;
+    border-radius: 6px;
+    font-size: 0.9rem;
+  }
+  input[type=text]:focus { outline: none; border-color: var(--accent); }
+  button {
+    background: var(--accent);
+    color: white;
+    border: none;
+    padding: 0.45rem 0.85rem;
+    border-radius: 6px;
+    font-size: 0.88rem;
+    cursor: pointer;
+    font-weight: 500;
+  }
+  button:hover { filter: brightness(1.1); }
+  button.danger { background: var(--danger); }
+  button.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .row { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
+  .empty { color: var(--muted); font-style: italic; padding: 0.6rem 0; }
+  .cluster-list { display: flex; flex-direction: column; gap: 0.5rem; margin: 0.5rem 0 0.75rem; }
+  .cluster-row { display: flex; gap: 0.5rem; align-items: center; }
+  .cluster-row .label { font-family: ui-monospace, monospace; color: var(--muted); min-width: 110px; }
+  .session-card { padding: 0.75rem; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.75rem; }
+  .session-card .meta { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.5rem; font-family: ui-monospace, monospace; }
+  .toast {
+    position: fixed; right: 1rem; bottom: 1rem;
+    background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+    padding: 0.7rem 1rem; border-radius: 6px; font-size: 0.9rem;
+    opacity: 0; transition: opacity 0.2s; pointer-events: none; max-width: 360px;
+  }
+  .toast.show { opacity: 1; }
+  .toast.success { border-left-color: var(--success); }
+  .toast.error { border-left-color: var(--danger); }
+</style>
+</head>
+<body>
+<header>
+  <h1>speech2text-api — Sprecher-Verwaltung</h1>
+  <div class="status" id="health">…</div>
+</header>
+
+<main>
+  <section>
+    <h2>Audiodatei transkribieren</h2>
+    <div class="desc">Audio hochladen → Transkript mit Sprechererkennung. Bekannte Sprecher werden automatisch namentlich gekennzeichnet; unbekannte Cluster (<code>SPEAKER_00</code> etc.) erscheinen unten unter „Offene Sitzungen" und können dort benannt werden.</div>
+    <form id="transcribe-form" class="row">
+      <input type="file" name="file" accept="audio/*" required>
+      <input type="text" name="language" placeholder="Sprache (z.B. de, leer = auto)" style="width:18ch">
+      <input type="text" name="min_speakers" placeholder="min Sprecher" style="width:12ch">
+      <input type="text" name="max_speakers" placeholder="max Sprecher" style="width:12ch">
+      <button type="submit">Transkribieren</button>
+    </form>
+    <div id="transcribe-status" style="margin-top:0.75rem;color:var(--muted);font-size:0.88rem"></div>
+    <div id="transcribe-result" hidden style="margin-top:1rem">
+      <div class="row" style="justify-content:space-between;margin-bottom:0.5rem">
+        <span style="color:var(--muted);font-size:0.85rem" id="transcribe-meta"></span>
+        <span class="row">
+          <button class="ghost" id="copy-md">Markdown kopieren</button>
+          <button class="ghost" id="download-md">Download .md</button>
+        </span>
+      </div>
+      <pre id="transcribe-output" style="background:#0c0e13;border:1px solid var(--border);border-radius:8px;padding:1rem;overflow:auto;max-height:480px;white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:0.85rem;margin:0"></pre>
+    </div>
+  </section>
+
+  <section>
+    <h2>Bekannte Sprecher</h2>
+    <div class="desc">Sprecher, die in der lokalen Datenbank gespeichert sind. „Samples" ist die Anzahl hinterlegter Voice-Embeddings — mehr Samples = robusteres Wiedererkennen.</div>
+    <table id="speakers-table">
+      <thead><tr><th>Name</th><th>Samples</th><th>Angelegt</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="empty" id="speakers-empty" hidden>Noch keine Sprecher angelegt.</div>
+  </section>
+
+  <section>
+    <h2>Offene Sitzungen</h2>
+    <div class="desc">Cluster aus Transkriptionen, die noch keinem bekannten Sprecher zugeordnet sind. Trage einen Namen ein und klicke „Zuweisen", um die Stimme zukünftig automatisch zu erkennen.</div>
+    <div id="sessions-list"></div>
+    <div class="empty" id="sessions-empty" hidden>Keine offenen Sitzungen.</div>
+  </section>
+
+  <section>
+    <h2>Neu anlernen</h2>
+    <div class="desc">Lade ein Audio-Sample (≥ 5 s sauberer Sprache von genau einer Person) und gib einen Namen an. Bestehende Namen erhalten ein zusätzliches Sample.</div>
+    <form id="enroll-form" class="row">
+      <input type="text" name="name" placeholder="Name" required>
+      <input type="file" name="file" accept="audio/*" required>
+      <button type="submit">Anlernen</button>
+    </form>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let toastTimer;
+function toast(msg, kind = "") {
+  const t = $("toast");
+  t.textContent = msg;
+  t.className = "toast show " + kind;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 3500);
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, opts);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`${res.status}: ${text}`);
+  }
+  return res.json();
+}
+
+async function loadHealth() {
+  try {
+    const h = await api("/health");
+    const gpu = h.gpu || (h.cuda_available ? "CUDA" : "CPU");
+    $("health").textContent = `${gpu} · ${h.model} · Schwelle ${h.match_threshold}`;
+  } catch (e) { $("health").textContent = "offline"; }
+}
+
+async function loadSpeakers() {
+  const { speakers } = await api("/speakers");
+  const tbody = document.querySelector("#speakers-table tbody");
+  tbody.innerHTML = "";
+  $("speakers-empty").hidden = speakers.length > 0;
+  document.querySelector("#speakers-table").hidden = speakers.length === 0;
+  for (const s of speakers) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><strong>${escapeHtml(s.name)}</strong></td>
+      <td>${s.samples}</td>
+      <td><span style="color:var(--muted);font-family:ui-monospace,monospace;font-size:0.85em">${s.created_at}</span></td>
+      <td style="text-align:right"></td>
+    `;
+    const btn = document.createElement("button");
+    btn.className = "danger";
+    btn.textContent = "Löschen";
+    btn.onclick = () => deleteSpeaker(s.name);
+    tr.lastElementChild.appendChild(btn);
+    tbody.appendChild(tr);
+  }
+}
+
+async function deleteSpeaker(name) {
+  if (!confirm(`Speaker "${name}" wirklich löschen? Alle Samples gehen verloren.`)) return;
+  try {
+    const res = await fetch(`/speakers/${encodeURIComponent(name)}`, { method: "DELETE" });
+    if (!res.ok) throw new Error(await res.text());
+    toast(`Speaker "${name}" gelöscht`, "success");
+    loadSpeakers();
+  } catch (e) { toast("Fehler: " + e.message, "error"); }
+}
+
+async function loadSessions() {
+  const { sessions } = await api("/sessions/pending?unassigned_only=true&limit=50");
+  const wrap = $("sessions-list");
+  wrap.innerHTML = "";
+  $("sessions-empty").hidden = sessions.length > 0;
+  for (const s of sessions) {
+    const card = document.createElement("div");
+    card.className = "session-card";
+    card.innerHTML = `
+      <div class="meta">Session <code>${s.session_id.slice(0, 12)}…</code> · ${s.created_at}</div>
+      <div class="cluster-list"></div>
+      <div class="row">
+        <button data-sid="${s.session_id}">Zuweisen</button>
+        <span style="color:var(--muted);font-size:0.8rem">Felder leer lassen, um Cluster zu überspringen</span>
+      </div>
+    `;
+    const list = card.querySelector(".cluster-list");
+    for (const cl of s.clusters) {
+      const row = document.createElement("div");
+      row.className = "cluster-row";
+      row.innerHTML = `
+        <span class="label">${escapeHtml(cl.label)}</span>
+        <input type="text" placeholder="Name…" data-label="${escapeHtml(cl.label)}">
+      `;
+      list.appendChild(row);
+    }
+    card.querySelector("button").onclick = () => assignSession(s.session_id, card);
+    wrap.appendChild(card);
+  }
+}
+
+async function assignSession(sessionId, card) {
+  const mapping = {};
+  card.querySelectorAll("input[data-label]").forEach((inp) => {
+    const v = inp.value.trim();
+    if (v) mapping[inp.dataset.label] = v;
+  });
+  if (Object.keys(mapping).length === 0) {
+    toast("Mindestens einen Namen eintragen.", "error");
+    return;
+  }
+  try {
+    const res = await fetch(`/sessions/${sessionId}/assign`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(mapping),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    toast(`Zugewiesen: ${Object.entries(data.assigned).map(([k, v]) => `${k}→${v}`).join(", ")}`, "success");
+    await Promise.all([loadSpeakers(), loadSessions()]);
+  } catch (e) { toast("Fehler: " + e.message, "error"); }
+}
+
+let lastTranscriptMd = "";
+let lastTranscriptName = "transkript.md";
+
+$("transcribe-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const form = ev.target;
+  const fd = new FormData(form);
+  const file = fd.get("file");
+  if (!file || !file.name) { toast("Keine Datei gewählt.", "error"); return; }
+  lastTranscriptName = file.name.replace(/\.[^.]+$/, "") + ".md";
+  // Leere optionale Felder entfernen
+  for (const k of ["language", "min_speakers", "max_speakers"]) {
+    if (!fd.get(k)) fd.delete(k);
+  }
+  fd.set("format", "md");
+
+  const btn = form.querySelector("button");
+  btn.disabled = true; btn.textContent = "Transkribiere…";
+  $("transcribe-status").textContent = `Verarbeite "${file.name}" — kann je nach Länge ein paar Minuten dauern…`;
+  $("transcribe-result").hidden = true;
+
+  try {
+    const res = await fetch("/transcribe", { method: "POST", body: fd });
+    if (!res.ok) throw new Error(await res.text());
+    const sessionId = res.headers.get("X-Session-Id") || "";
+    const md = await res.text();
+    lastTranscriptMd = md;
+    $("transcribe-output").textContent = md;
+    $("transcribe-meta").innerHTML = sessionId
+      ? `Session <code>${sessionId.slice(0, 12)}…</code> — unbekannte Sprecher unten benennen`
+      : "";
+    $("transcribe-result").hidden = false;
+    $("transcribe-status").textContent = "";
+    toast("Transkript erstellt.", "success");
+    loadSessions();
+  } catch (e) {
+    $("transcribe-status").textContent = "";
+    toast("Fehler: " + e.message, "error");
+  } finally {
+    btn.disabled = false; btn.textContent = "Transkribieren";
+  }
+});
+
+$("copy-md").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText(lastTranscriptMd); toast("In Zwischenablage kopiert.", "success"); }
+  catch (e) { toast("Kopieren fehlgeschlagen.", "error"); }
+});
+
+$("download-md").addEventListener("click", () => {
+  const blob = new Blob([lastTranscriptMd], { type: "text/markdown;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = lastTranscriptName;
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+$("enroll-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const form = ev.target;
+  const fd = new FormData(form);
+  const btn = form.querySelector("button");
+  btn.disabled = true; btn.textContent = "Verarbeite…";
+  try {
+    const res = await fetch("/speakers", { method: "POST", body: fd });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    toast(`"${data.name}" angelegt (${data.samples} Sample${data.samples === 1 ? "" : "s"})`, "success");
+    form.reset();
+    loadSpeakers();
+  } catch (e) { toast("Fehler: " + e.message, "error"); }
+  finally { btn.disabled = false; btn.textContent = "Anlernen"; }
+});
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+loadHealth();
+loadSpeakers();
+loadSessions();
+</script>
+</body>
+</html>

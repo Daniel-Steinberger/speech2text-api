@@ -219,6 +219,20 @@ class SpeakerStore:
                 assigned[label] = name
         return assigned
 
+    def list_pending(self, unassigned_only: bool = True, limit: int = 50) -> list[dict]:
+        """Offene Sitzungen mit ihren Cluster-Labels, gruppiert nach session_id."""
+        where = "WHERE matched_name IS NULL" if unassigned_only else ""
+        with self._conn() as c:
+            rows = c.execute(
+                f"SELECT session_id, cluster_label, matched_name, created_at "
+                f"FROM pending_clusters {where} ORDER BY created_at DESC, session_id, cluster_label"
+            ).fetchall()
+        sessions: dict[str, dict] = {}
+        for sid, label, matched, created in rows:
+            s = sessions.setdefault(sid, {"session_id": sid, "created_at": created, "clusters": []})
+            s["clusters"].append({"label": label, "matched_name": matched})
+        return list(sessions.values())[:limit]
+
     def prune_pending(self, older_than_seconds: int = 7 * 24 * 3600) -> int:
         with self._conn() as c:
             cur = c.execute(
