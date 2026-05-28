@@ -145,6 +145,7 @@
       <thead><tr><th>Name</th><th>Samples</th><th>Angelegt</th><th></th></tr></thead>
       <tbody></tbody>
     </table>
+    <div id="samples-detail" hidden style="margin-top:1rem;padding:0.75rem 1rem;background:#0c0e13;border:1px solid var(--border);border-radius:8px"></div>
     <div class="empty" id="speakers-empty" hidden>Noch keine Sprecher angelegt.</div>
   </section>
 
@@ -204,19 +205,63 @@ async function loadSpeakers() {
   document.querySelector("#speakers-table").hidden = speakers.length === 0;
   for (const s of speakers) {
     const tr = document.createElement("tr");
+    const samplesLabel = s.samples_with_audio
+      ? `${s.samples} <span style="color:var(--muted);font-size:0.82em">(${s.samples_with_audio} mit Audio)</span>`
+      : `${s.samples}`;
     tr.innerHTML = `
       <td><strong>${escapeHtml(s.name)}</strong></td>
-      <td>${s.samples}</td>
+      <td>${samplesLabel}</td>
       <td><span style="color:var(--muted);font-family:ui-monospace,monospace;font-size:0.85em">${s.created_at}</span></td>
-      <td style="text-align:right"></td>
+      <td style="text-align:right;white-space:nowrap"></td>
     `;
-    const btn = document.createElement("button");
-    btn.className = "danger";
-    btn.textContent = "Löschen";
-    btn.onclick = () => deleteSpeaker(s.name);
-    tr.lastElementChild.appendChild(btn);
+    const actions = tr.lastElementChild;
+
+    if (s.samples_with_audio > 0) {
+      const playBtn = document.createElement("button");
+      playBtn.className = "ghost";
+      playBtn.textContent = "Samples ▾";
+      playBtn.style.marginRight = "0.4rem";
+      playBtn.onclick = () => showSpeakerSamples(s.name);
+      actions.appendChild(playBtn);
+    }
+
+    const delBtn = document.createElement("button");
+    delBtn.className = "danger";
+    delBtn.textContent = "Löschen";
+    delBtn.onclick = () => deleteSpeaker(s.name);
+    actions.appendChild(delBtn);
+
     tbody.appendChild(tr);
   }
+}
+
+async function showSpeakerSamples(name) {
+  const wrap = $("samples-detail");
+  try {
+    const data = await api(`/speakers/${encodeURIComponent(name)}/samples`);
+    const audioSamples = data.samples.filter((s) => s.has_audio);
+    if (audioSamples.length === 0) {
+      wrap.innerHTML = `<em style="color:var(--muted)">Keine Audio-Samples für „${escapeHtml(name)}".</em>`;
+      wrap.hidden = false;
+      return;
+    }
+    let html = `<div style="margin-bottom:0.5rem"><strong>Samples für „${escapeHtml(name)}"</strong>
+                <button class="icon-btn" onclick="document.getElementById('samples-detail').hidden=true" style="float:right">✕</button></div>`;
+    html += `<div style="display:flex;flex-direction:column;gap:0.4rem">`;
+    for (const sm of audioSamples) {
+      html += `<div class="cluster-row">
+        <button class="play-btn" data-audio="/speakers/samples/${sm.id}/audio">▶</button>
+        <span style="color:var(--muted);font-size:0.82em;font-family:ui-monospace,monospace">#${sm.id} · ${sm.created_at}</span>
+        <span class="source" style="margin-left:0.5rem">${escapeHtml(sm.source || "")}</span>
+      </div>`;
+    }
+    html += `</div>`;
+    wrap.innerHTML = html;
+    wrap.hidden = false;
+    wrap.querySelectorAll(".play-btn").forEach((btn) => {
+      btn.onclick = () => togglePlay(btn);
+    });
+  } catch (e) { toast("Fehler: " + e.message, "error"); }
 }
 
 async function deleteSpeaker(name) {
@@ -241,7 +286,7 @@ async function loadSessions() {
       <div class="meta">Session <code>${s.session_id.slice(0, 12)}…</code> · ${s.created_at}</div>
       <div class="cluster-list"></div>
       <div class="row">
-        <button data-sid="${s.session_id}">Zuweisen</button>
+        <button class="assign-btn" data-sid="${s.session_id}">Zuweisen</button>
         <span style="color:var(--muted);font-size:0.8rem">Felder leer lassen, um Cluster zu überspringen</span>
       </div>
     `;
@@ -265,7 +310,7 @@ async function loadSessions() {
       row.querySelector(".icon-btn").onclick = () => deleteCluster(s.session_id, cl.label);
       list.appendChild(row);
     }
-    card.querySelector("button").onclick = () => assignSession(s.session_id, card);
+    card.querySelector(".assign-btn").onclick = () => assignSession(s.session_id, card);
     wrap.appendChild(card);
   }
 }

@@ -151,7 +151,14 @@ async def enroll_speaker(
         embed: EmbeddingExtractor = models["embed"]
         store: SpeakerStore = models["store"]
         vec = embed.extract(audio)
-        store.add_sample(name, vec, source=f"enroll:{file.filename}")
+        # Sample für spätere Wiedergabe abspeichern (max. 15 s, Opus)
+        preview = audio[: 15 * 16000]
+        try:
+            sample_bytes = to_opus_bytes(preview)
+        except Exception as e:
+            print(f"[warn] Opus-Encoding beim Enrollment fehlgeschlagen: {e}")
+            sample_bytes = None
+        store.add_sample(name, vec, source=f"enroll:{file.filename}", audio_sample=sample_bytes)
         return {"name": name, "samples": next(
             (s["samples"] for s in store.list_speakers() if s["name"].lower() == name.lower()),
             1,
@@ -169,6 +176,21 @@ def delete_speaker(name: str):
     if not store.delete_speaker(name):
         raise HTTPException(404, f"Speaker '{name}' nicht gefunden.")
     return {"deleted": name}
+
+
+@app.get("/speakers/{name}/samples")
+def list_speaker_samples(name: str):
+    store: SpeakerStore = models["store"]
+    return {"name": name, "samples": store.list_speaker_samples(name)}
+
+
+@app.get("/speakers/samples/{sample_id}/audio")
+def get_speaker_sample_audio(sample_id: int):
+    store: SpeakerStore = models["store"]
+    blob = store.get_speaker_sample_audio(sample_id)
+    if not blob:
+        raise HTTPException(404, "Kein Audio-Sample für diese Sample-ID vorhanden.")
+    return Response(content=blob, media_type="audio/ogg")
 
 
 @app.get("/sessions/pending")

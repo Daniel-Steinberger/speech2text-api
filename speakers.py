@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS embeddings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     speaker_id INTEGER NOT NULL REFERENCES speakers(id) ON DELETE CASCADE,
     vector BLOB NOT NULL,
+    audio_sample BLOB,
     source TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -164,15 +165,18 @@ class SpeakerStore:
 
     @staticmethod
     def _migrate(c: sqlite3.Connection) -> None:
-        cols = {row[1] for row in c.execute("PRAGMA table_info(pending_clusters)")}
+        pc_cols = {row[1] for row in c.execute("PRAGMA table_info(pending_clusters)")}
         for name, ddl in [
             ("audio_sample", "ALTER TABLE pending_clusters ADD COLUMN audio_sample BLOB"),
             ("source_filename", "ALTER TABLE pending_clusters ADD COLUMN source_filename TEXT"),
             ("first_start", "ALTER TABLE pending_clusters ADD COLUMN first_start REAL"),
             ("last_end", "ALTER TABLE pending_clusters ADD COLUMN last_end REAL"),
         ]:
-            if name not in cols:
+            if name not in pc_cols:
                 c.execute(ddl)
+        em_cols = {row[1] for row in c.execute("PRAGMA table_info(embeddings)")}
+        if "audio_sample" not in em_cols:
+            c.execute("ALTER TABLE embeddings ADD COLUMN audio_sample BLOB")
 
     @contextmanager
     def _conn(self):
@@ -186,25 +190,56 @@ class SpeakerStore:
 
     # --- Enrollment ---
 
-    def add_sample(self, name: str, embedding: np.ndarray, source: str | None = None) -> int:
+    def add_sample(
+        self,
+        name: str,
+        embedding: np.ndarray,
+        source: str | None = None,
+        audio_sample: bytes | None = None,
+    ) -> int:
         with self._conn() as c:
             c.execute("INSERT OR IGNORE INTO speakers(name) VALUES (?)", (name,))
             row = c.execute("SELECT id FROM speakers WHERE name = ?", (name,)).fetchone()
             speaker_id = row[0]
             c.execute(
-                "INSERT INTO embeddings(speaker_id, vector, source) VALUES (?, ?, ?)",
-                (speaker_id, _vec_to_blob(embedding), source),
+                "INSERT INTO embeddings(speaker_id, vector, source, audio_sample) "
+                "VALUES (?, ?, ?, ?)",
+                (speaker_id, _vec_to_blob(embedding), source, audio_sample),
             )
             return speaker_id
 
     def list_speakers(self) -> list[dict]:
         with self._conn() as c:
             rows = c.execute(
-                "SELECT s.name, s.created_at, COUNT(e.id) "
+                "SELECT s.name, s.created_at, COUNT(e.id), "
+                "  SUM(CASE WHEN e.audio_sample IS NOT NULL THEN 1 ELSE 0 END) "
                 "FROM speakers s LEFT JOIN embeddings e ON e.speaker_id = s.id "
                 "GROUP BY s.id ORDER BY s.name"
             ).fetchall()
-        return [{"name": r[0], "created_at": r[1], "samples": r[2]} for r in rows]
+        return [
+            {"name": r[0], "created_at": r[1], "samples": r[2], "samples_with_audio": r[3] or 0}
+            for r in rows
+        ]
+
+    def list_speaker_samples(self, name: str) -> list[dict]:
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT e.id, e.created_at, e.source, (e.audio_sample IS NOT NULL) "
+                "FROM embeddings e JOIN speakers s ON s.id = e.speaker_id "
+                "WHERE s.name = ? ORDER BY e.created_at",
+                (name,),
+            ).fetchall()
+        return [
+            {"id": r[0], "created_at": r[1], "source": r[2], "has_audio": bool(r[3])}
+            for r in rows
+        ]
+
+    def get_speaker_sample_audio(self, sample_id: int) -> bytes | None:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT audio_sample FROM embeddings WHERE id = ?", (sample_id,)
+            ).fetchone()
+        return row[0] if row and row[0] else None
 
     def delete_speaker(self, name: str) -> bool:
         with self._conn() as c:
@@ -285,23 +320,24 @@ class SpeakerStore:
         return row[0] if row and row[0] else None
 
     def assign_session(self, session_id: str, mapping: dict[str, str]) -> dict[str, str]:
-        """Mapping {cluster_label: name} -> persistiert die Cluster-Embeddings unter den Namen."""
+        """Mapping {cluster_label: name} -> persistiert die Cluster-Embeddings (inkl. Audio) unter den Namen."""
         assigned: dict[str, str] = {}
         with self._conn() as c:
             for label, name in mapping.items():
                 row = c.execute(
-                    "SELECT vector FROM pending_clusters WHERE session_id = ? AND cluster_label = ?",
+                    "SELECT vector, audio_sample FROM pending_clusters "
+                    "WHERE session_id = ? AND cluster_label = ?",
                     (session_id, label),
                 ).fetchone()
                 if not row:
                     continue
-                vec = _blob_to_vec(row[0])
-                # add_sample inline (gleiche Connection):
+                vec_blob, audio_blob = row
                 c.execute("INSERT OR IGNORE INTO speakers(name) VALUES (?)", (name,))
                 sid = c.execute("SELECT id FROM speakers WHERE name = ?", (name,)).fetchone()[0]
                 c.execute(
-                    "INSERT INTO embeddings(speaker_id, vector, source) VALUES (?, ?, ?)",
-                    (sid, _vec_to_blob(vec), f"session:{session_id}:{label}"),
+                    "INSERT INTO embeddings(speaker_id, vector, audio_sample, source) "
+                    "VALUES (?, ?, ?, ?)",
+                    (sid, vec_blob, audio_blob, f"session:{session_id}:{label}"),
                 )
                 c.execute(
                     "UPDATE pending_clusters SET matched_name = ? "
