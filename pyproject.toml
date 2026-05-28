@@ -1,0 +1,23 @@
+[project]
+name = "speech2text-api"
+version = "0.1.0"
+description = "FastAPI für Audio-Upload → Transkript mit Sprechererkennung (WhisperX) auf lokaler GPU"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "python-multipart>=0.0.20",
+    "python-dotenv>=1.0",
+    "whisperx>=3.3.1",
+    "torch>=2.7",
+    "torchaudio>=2.7",
+]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchaudio = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
