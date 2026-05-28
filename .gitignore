@@ -6,6 +6,8 @@ uv.lock
 .ruff_cache/
 .pytest_cache/
 uploads/
+speakers.db
+speakers.db-journal
 *.wav
 *.mp3
 *.m4a

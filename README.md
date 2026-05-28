@@ -22,10 +22,11 @@ einmalig akzeptiert werden:
 
 1. Account anlegen: https://huggingface.co
 2. Token erzeugen (Scope **Read**): https://huggingface.co/settings/tokens
-3. Lizenz für beide Modelle bestätigen (eingeloggt auf die Seite gehen und
+3. Lizenz für drei Modelle bestätigen (eingeloggt auf die Seiten gehen und
    die Bedingungen akzeptieren):
    - https://huggingface.co/pyannote/speaker-diarization-3.1
    - https://huggingface.co/pyannote/segmentation-3.0
+   - https://huggingface.co/pyannote/embedding (für Sprecher-Wiedererkennung)
 4. `.env` anlegen und Token eintragen:
    ```bash
    cp .env.example .env
@@ -104,6 +105,64 @@ curl -X POST http://localhost:8000/transcribe \
 | `max_speakers` | —              | Maximalanzahl Sprecher                         |
 | `format`       | `md`           | `md`, `txt` oder `json`                        |
 
+## Sprecher-Wiedererkennung über Sitzungen hinweg
+
+pyannote-Diarization vergibt **anonyme Labels** (`SPEAKER_00`, `SPEAKER_01`)
+nur pro Datei stabil. Damit ein Sprecher datei-übergreifend als z. B.
+„Daniel" wiedererkannt wird, extrahiert die API **Voice-Embeddings** (ECAPA-
+TDNN, 512-dim) pro Cluster und vergleicht sie per Cosine-Similarity gegen
+eine lokale SQLite-Datei (`speakers.db`).
+
+### Zwei Wege Sprecher anzulernen
+
+**1. Dediziertes Enrollment** — sauberer kurzer Mitschnitt (≥ 5 s) mit Namen:
+
+```bash
+curl -X POST http://localhost:8000/speakers \
+  -F "name=Daniel" \
+  -F "file=@daniel_sample.wav"
+```
+
+Mehrfacher Upload mit gleichem Namen fügt zusätzliche Samples zum bestehenden
+Sprecher hinzu — verbessert die Robustheit über verschiedene Mikrofone /
+Umgebungen.
+
+**2. Nachträgliche Zuweisung** — nach einer Transkription Cluster-Labels
+auf Namen mappen. `/transcribe` legt jede Sitzung mit Cluster-Embeddings
+zwischen und gibt eine `session_id` zurück (HTTP-Header `X-Session-Id`,
+in JSON-Antworten zusätzlich im Body):
+
+```bash
+SESSION=$(curl -sD - -X POST http://localhost:8000/transcribe \
+  -F "file=@meeting.m4a" -o transkript.md \
+  | awk -F': ' '/^X-Session-Id/ {print $2}' | tr -d '\r')
+
+curl -X POST http://localhost:8000/sessions/$SESSION/assign \
+  -H "Content-Type: application/json" \
+  -d '{"SPEAKER_00": "Daniel", "SPEAKER_01": "Anna"}'
+```
+
+Beim nächsten Transkribieren werden Daniel und Anna automatisch im
+Transkript benannt (statt `SPEAKER_00`/`01`), wenn ihre Stimmen wieder
+auftauchen.
+
+### Bekannte Sprecher verwalten
+
+```bash
+curl http://localhost:8000/speakers          # auflisten
+curl -X DELETE http://localhost:8000/speakers/Daniel
+```
+
+### Caveats
+
+- **Sample-Länge**: Enrollment-Samples ≥ 5 s sauberer Sprache, je mehr desto
+  besser. Match-Cluster sammelt automatisch bis zu 30 s pro Sitzung.
+- **Akustik zählt**: Selbe Mikro-/Raum-Umgebung wie beim Enrollment liefert
+  bessere Match-Raten. Telefonqualität ↔ Headset ↔ Konferenzmikro können
+  abweichen — mehrere Samples in verschiedenen Settings hochladen hilft.
+- **Schwelle (`MATCH_THRESHOLD`)** in `.env` tunen: zu niedrig → falsche
+  Treffer, zu hoch → ständig „SPEAKER_00".
+
 ## Konfiguration
 
 Über `.env` (siehe `.env.example`):
@@ -116,6 +175,8 @@ curl -X POST http://localhost:8000/transcribe \
 | `COMPUTE_TYPE`     | `float16`   | `float16` (GPU), `int8`, `float32`           |
 | `BATCH_SIZE`       | `16`        | Kleiner = weniger VRAM                       |
 | `DEFAULT_LANGUAGE` | `de`        | Wird verwendet wenn Request keine angibt     |
+| `SPEAKER_DB`       | `speakers.db` | SQLite-Pfad für Sprecher-Embeddings        |
+| `MATCH_THRESHOLD`  | `0.50`      | Cosine-Schwelle Cluster ↔ bekannter Sprecher |
 
 ## Format des Markdown-Outputs
 
