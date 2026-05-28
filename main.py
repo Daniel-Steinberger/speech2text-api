@@ -188,6 +188,14 @@ def get_cluster_audio(session_id: str, cluster_label: str):
     return Response(content=blob, media_type="audio/ogg")
 
 
+@app.delete("/sessions/{session_id}/clusters/{cluster_label}")
+def delete_pending_cluster(session_id: str, cluster_label: str):
+    store: SpeakerStore = models["store"]
+    if not store.delete_pending_cluster(session_id, cluster_label):
+        raise HTTPException(404, "Cluster nicht gefunden.")
+    return {"deleted": {"session_id": session_id, "cluster_label": cluster_label}}
+
+
 @app.post("/sessions/{session_id}/assign")
 def assign_session(session_id: str, mapping: dict[str, str] = Body(...)):
     """Ordnet anonyme Cluster-Labels (z.B. 'SPEAKER_00') Namen zu und speichert deren Embeddings."""
@@ -275,9 +283,28 @@ async def transcribe(
             except Exception as e:  # ffmpeg-Encoding fehlgeschlagen — Sample weglassen
                 print(f"[warn] Opus-Encoding für {label} fehlgeschlagen: {e}")
 
+        # Zeitspanne pro Cluster (erster Start / letztes Ende im Original-Audio)
+        time_ranges: dict[str, tuple[float, float]] = {}
+        for seg in segments:
+            spk = seg.get("speaker")
+            if not spk:
+                continue
+            s, e = float(seg["start"]), float(seg["end"])
+            if spk in time_ranges:
+                time_ranges[spk] = (min(time_ranges[spk][0], s), max(time_ranges[spk][1], e))
+            else:
+                time_ranges[spk] = (s, e)
+
         # Session anlegen und alle Cluster-Embeddings + Audio ablegen
         session_id = store.new_session()
-        store.store_pending(session_id, cluster_embeddings, cluster_to_name, audio=cluster_audio)
+        store.store_pending(
+            session_id,
+            cluster_embeddings,
+            cluster_to_name,
+            audio=cluster_audio,
+            source_filename=file.filename,
+            time_ranges=time_ranges,
+        )
 
         segments = relabel_segments(segments, cluster_to_name)
 

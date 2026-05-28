@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS pending_clusters (
     vector BLOB NOT NULL,
     matched_name TEXT,
     audio_sample BLOB,
+    source_filename TEXT,
+    first_start REAL,
+    last_end REAL,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (session_id, cluster_label)
 );
@@ -162,8 +165,14 @@ class SpeakerStore:
     @staticmethod
     def _migrate(c: sqlite3.Connection) -> None:
         cols = {row[1] for row in c.execute("PRAGMA table_info(pending_clusters)")}
-        if "audio_sample" not in cols:
-            c.execute("ALTER TABLE pending_clusters ADD COLUMN audio_sample BLOB")
+        for name, ddl in [
+            ("audio_sample", "ALTER TABLE pending_clusters ADD COLUMN audio_sample BLOB"),
+            ("source_filename", "ALTER TABLE pending_clusters ADD COLUMN source_filename TEXT"),
+            ("first_start", "ALTER TABLE pending_clusters ADD COLUMN first_start REAL"),
+            ("last_end", "ALTER TABLE pending_clusters ADD COLUMN last_end REAL"),
+        ]:
+            if name not in cols:
+                c.execute(ddl)
 
     @contextmanager
     def _conn(self):
@@ -239,16 +248,32 @@ class SpeakerStore:
         clusters: dict[str, np.ndarray],
         matched: dict[str, str | None],
         audio: dict[str, bytes] | None = None,
+        source_filename: str | None = None,
+        time_ranges: dict[str, tuple[float, float]] | None = None,
     ) -> None:
         audio = audio or {}
+        time_ranges = time_ranges or {}
         with self._conn() as c:
             for label, vec in clusters.items():
+                start, end = time_ranges.get(label, (None, None))
                 c.execute(
                     "INSERT OR REPLACE INTO pending_clusters"
-                    "(session_id, cluster_label, vector, matched_name, audio_sample) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (session_id, label, _vec_to_blob(vec), matched.get(label), audio.get(label)),
+                    "(session_id, cluster_label, vector, matched_name, audio_sample, "
+                    " source_filename, first_start, last_end) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        session_id, label, _vec_to_blob(vec), matched.get(label),
+                        audio.get(label), source_filename, start, end,
+                    ),
                 )
+
+    def delete_pending_cluster(self, session_id: str, cluster_label: str) -> bool:
+        with self._conn() as c:
+            cur = c.execute(
+                "DELETE FROM pending_clusters WHERE session_id = ? AND cluster_label = ?",
+                (session_id, cluster_label),
+            )
+            return cur.rowcount > 0
 
     def get_pending_audio(self, session_id: str, cluster_label: str) -> bytes | None:
         with self._conn() as c:
@@ -292,16 +317,22 @@ class SpeakerStore:
         with self._conn() as c:
             rows = c.execute(
                 f"SELECT session_id, cluster_label, matched_name, created_at, "
-                f"  (audio_sample IS NOT NULL) AS has_audio "
+                f"  (audio_sample IS NOT NULL) AS has_audio, "
+                f"  source_filename, first_start, last_end "
                 f"FROM pending_clusters {where} ORDER BY created_at DESC, session_id, cluster_label"
             ).fetchall()
         sessions: dict[str, dict] = {}
-        for sid, label, matched, created, has_audio in rows:
-            s = sessions.setdefault(sid, {"session_id": sid, "created_at": created, "clusters": []})
+        for sid, label, matched, created, has_audio, src, fstart, lend in rows:
+            s = sessions.setdefault(
+                sid,
+                {"session_id": sid, "created_at": created, "source_filename": src, "clusters": []},
+            )
             s["clusters"].append({
                 "label": label,
                 "matched_name": matched,
                 "has_audio": bool(has_audio),
+                "first_start": fstart,
+                "last_end": lend,
             })
         return list(sessions.values())[:limit]
 

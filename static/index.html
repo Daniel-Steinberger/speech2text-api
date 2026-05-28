@@ -83,6 +83,18 @@
   .play-btn:hover { border-color: var(--accent); color: var(--accent); }
   .play-btn.playing { border-color: var(--accent); color: var(--accent); background: rgba(91,141,239,0.1); }
   .play-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+  .cluster-row .source {
+    font-size: 0.78rem; color: var(--muted);
+    font-family: ui-monospace, monospace;
+    margin-left: 0.3rem; flex: 1; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .icon-btn {
+    background: transparent; border: none; color: var(--muted);
+    cursor: pointer; padding: 0.25rem 0.4rem; border-radius: 4px;
+    font-size: 0.95rem; line-height: 1;
+  }
+  .icon-btn:hover { color: var(--danger); background: rgba(226,87,76,0.1); }
   .session-card { padding: 0.75rem; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.75rem; }
   .session-card .meta { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.5rem; font-family: ui-monospace, monospace; }
   .toast {
@@ -240,13 +252,17 @@ async function loadSessions() {
       const playBtn = cl.has_audio
         ? `<button class="play-btn" title="Sample abspielen" data-audio="/sessions/${s.session_id}/clusters/${encodeURIComponent(cl.label)}/audio">▶</button>`
         : `<button class="play-btn" disabled title="Kein Sample verfügbar">▶</button>`;
+      const sourceText = formatSource(s.source_filename, cl.first_start, cl.last_end);
       row.innerHTML = `
         ${playBtn}
         <span class="label">${escapeHtml(cl.label)}</span>
         <input type="text" placeholder="Name…" data-label="${escapeHtml(cl.label)}">
+        <span class="source" title="${escapeHtml(sourceText)}">${escapeHtml(sourceText)}</span>
+        <button class="icon-btn" title="Cluster verwerfen">✕</button>
       `;
-      const btn = row.querySelector(".play-btn");
-      if (cl.has_audio) btn.onclick = () => togglePlay(btn);
+      const playButton = row.querySelector(".play-btn");
+      if (cl.has_audio) playButton.onclick = () => togglePlay(playButton);
+      row.querySelector(".icon-btn").onclick = () => deleteCluster(s.session_id, cl.label);
       list.appendChild(row);
     }
     card.querySelector("button").onclick = () => assignSession(s.session_id, card);
@@ -274,6 +290,30 @@ async function assignSession(sessionId, card) {
     const data = await res.json();
     toast(`Zugewiesen: ${Object.entries(data.assigned).map(([k, v]) => `${k}→${v}`).join(", ")}`, "success");
     await Promise.all([loadSpeakers(), loadSessions()]);
+  } catch (e) { toast("Fehler: " + e.message, "error"); }
+}
+
+function fmtTime(s) {
+  if (s == null) return "";
+  s = Math.max(0, Math.floor(s));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`;
+}
+
+function formatSource(filename, start, end) {
+  const parts = [];
+  if (filename) parts.push(filename);
+  if (start != null && end != null) parts.push(`${fmtTime(start)} → ${fmtTime(end)}`);
+  return parts.join(" · ");
+}
+
+async function deleteCluster(sessionId, label) {
+  if (!confirm(`Cluster "${label}" verwerfen?`)) return;
+  try {
+    const res = await fetch(`/sessions/${sessionId}/clusters/${encodeURIComponent(label)}`, { method: "DELETE" });
+    if (!res.ok) throw new Error(await res.text());
+    toast("Cluster verworfen.", "success");
+    loadSessions();
   } catch (e) { toast("Fehler: " + e.message, "error"); }
 }
 
