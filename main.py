@@ -7,6 +7,7 @@ from typing import Literal
 
 import torch
 import whisperx
+from whisperx.diarize import DiarizationPipeline
 from dotenv import load_dotenv
 from fastapi import Body, FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -42,7 +43,7 @@ async def lifespan(_: FastAPI):
         language=DEFAULT_LANGUAGE,
     )
     print("[startup] Lade Diarization-Pipeline (pyannote)...")
-    models["diarize"] = whisperx.DiarizationPipeline(use_auth_token=HF_TOKEN, device=DEVICE)
+    models["diarize"] = DiarizationPipeline(token=HF_TOKEN, device=DEVICE)
     print("[startup] Lade Embedding-Modell (pyannote/embedding)...")
     models["embed"] = EmbeddingExtractor(hf_token=HF_TOKEN, device=DEVICE)
     print(f"[startup] Speaker-DB: {SPEAKER_DB}")
