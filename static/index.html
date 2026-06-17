@@ -83,6 +83,7 @@
   .play-btn:hover { border-color: var(--accent); color: var(--accent); }
   .play-btn.playing { border-color: var(--accent); color: var(--accent); background: rgba(91,141,239,0.1); }
   .play-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+  #transcribe-output.collapsed { max-height: 480px; }
   .cluster-row .source {
     font-size: 0.78rem; color: var(--muted);
     font-family: ui-monospace, monospace;
@@ -130,11 +131,12 @@
       <div class="row" style="justify-content:space-between;margin-bottom:0.5rem">
         <span style="color:var(--muted);font-size:0.85rem" id="transcribe-meta"></span>
         <span class="row">
+          <button class="ghost" id="toggle-md" hidden>Vollständig anzeigen</button>
           <button class="ghost" id="copy-md">Markdown kopieren</button>
           <button class="ghost" id="download-md">Download .md</button>
         </span>
       </div>
-      <pre id="transcribe-output" style="background:#0c0e13;border:1px solid var(--border);border-radius:8px;padding:1rem;overflow:auto;max-height:480px;white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:0.85rem;margin:0"></pre>
+      <pre id="transcribe-output" class="collapsed" style="background:#0c0e13;border:1px solid var(--border);border-radius:8px;padding:1rem;overflow:auto;white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:0.85rem;margin:0"></pre>
     </div>
   </section>
 
@@ -418,11 +420,18 @@ $("transcribe-form").addEventListener("submit", async (ev) => {
     const sessionId = res.headers.get("X-Session-Id") || "";
     const md = await res.text();
     lastTranscriptMd = md;
-    $("transcribe-output").textContent = md;
+    const out = $("transcribe-output");
+    out.textContent = md;
+    out.classList.add("collapsed");
     $("transcribe-meta").innerHTML = sessionId
       ? `Session <code>${sessionId.slice(0, 12)}…</code> — unbekannte Sprecher unten benennen`
       : "";
     $("transcribe-result").hidden = false;
+    // Toggle nur anbieten, wenn das Transkript höher als die Vorschau ist
+    // (erst nach dem Sichtbarmachen messbar)
+    const toggle = $("toggle-md");
+    toggle.hidden = out.scrollHeight <= out.clientHeight + 1;
+    toggle.textContent = "Vollständig anzeigen";
     $("transcribe-status").textContent = "";
     toast("Transkript erstellt.", "success");
     loadSessions();
@@ -432,6 +441,12 @@ $("transcribe-form").addEventListener("submit", async (ev) => {
   } finally {
     btn.disabled = false; btn.textContent = "Transkribieren";
   }
+});
+
+$("toggle-md").addEventListener("click", () => {
+  const out = $("transcribe-output");
+  const collapsed = out.classList.toggle("collapsed");
+  $("toggle-md").textContent = collapsed ? "Vollständig anzeigen" : "Einklappen";
 });
 
 $("copy-md").addEventListener("click", async () => {
