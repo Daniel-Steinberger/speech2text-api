@@ -48,17 +48,17 @@ Alignment-Modell für die erkannte Sprache dazu.
 ## Starten
 
 ```bash
-uv run uvicorn main:app --host 0.0.0.0 --port 8000
+uv run uvicorn main:app --host 0.0.0.0 --port 8002
 ```
 
 Health-Check:
 ```bash
-curl http://localhost:8000/health
+curl http://localhost:8002/health
 ```
 
 ## Web-UI
 
-Unter `http://<host>:8000/` läuft eine schlanke Web-Oberfläche zum:
+Unter `http://<host>:8002/` läuft eine schlanke Web-Oberfläche zum:
 
 - Audio hochladen und Transkript anzeigen / kopieren / als `.md` herunterladen
 - Bekannte Sprecher auflisten und löschen
@@ -72,7 +72,7 @@ Unter `http://<host>:8000/` läuft eine schlanke Web-Oberfläche zum:
 ### Markdown-Transkript (Default)
 
 ```bash
-curl -X POST http://localhost:8000/transcribe \
+curl -X POST http://localhost:8002/transcribe \
   -F "file=@meeting.m4a" \
   -F "language=de" \
   -o transkript.md
@@ -81,7 +81,7 @@ curl -X POST http://localhost:8000/transcribe \
 ### Reines Text-Format
 
 ```bash
-curl -X POST http://localhost:8000/transcribe \
+curl -X POST http://localhost:8002/transcribe \
   -F "file=@meeting.m4a" \
   -F "format=txt" \
   -o transkript.txt
@@ -90,7 +90,7 @@ curl -X POST http://localhost:8000/transcribe \
 ### JSON mit Wort-Zeitstempeln
 
 ```bash
-curl -X POST http://localhost:8000/transcribe \
+curl -X POST http://localhost:8002/transcribe \
   -F "file=@meeting.m4a" \
   -F "format=json" \
   -o transkript.json
@@ -99,7 +99,7 @@ curl -X POST http://localhost:8000/transcribe \
 ### Sprecherzahl eingrenzen (verbessert Diarization)
 
 ```bash
-curl -X POST http://localhost:8000/transcribe \
+curl -X POST http://localhost:8002/transcribe \
   -F "file=@interview.wav" \
   -F "min_speakers=2" \
   -F "max_speakers=2" \
@@ -129,7 +129,7 @@ eine lokale SQLite-Datei (`speakers.db`).
 **1. Dediziertes Enrollment** — sauberer kurzer Mitschnitt (≥ 5 s) mit Namen:
 
 ```bash
-curl -X POST http://localhost:8000/speakers \
+curl -X POST http://localhost:8002/speakers \
   -F "name=Daniel" \
   -F "file=@daniel_sample.wav"
 ```
@@ -144,11 +144,11 @@ zwischen und gibt eine `session_id` zurück (HTTP-Header `X-Session-Id`,
 in JSON-Antworten zusätzlich im Body):
 
 ```bash
-SESSION=$(curl -sD - -X POST http://localhost:8000/transcribe \
+SESSION=$(curl -sD - -X POST http://localhost:8002/transcribe \
   -F "file=@meeting.m4a" -o transkript.md \
   | awk -F': ' '/^X-Session-Id/ {print $2}' | tr -d '\r')
 
-curl -X POST http://localhost:8000/sessions/$SESSION/assign \
+curl -X POST http://localhost:8002/sessions/$SESSION/assign \
   -H "Content-Type: application/json" \
   -d '{"SPEAKER_00": "Daniel", "SPEAKER_01": "Anna"}'
 ```
@@ -160,8 +160,8 @@ auftauchen.
 ### Bekannte Sprecher verwalten
 
 ```bash
-curl http://localhost:8000/speakers          # auflisten
-curl -X DELETE http://localhost:8000/speakers/Daniel
+curl http://localhost:8002/speakers          # auflisten
+curl -X DELETE http://localhost:8002/speakers/Daniel
 ```
 
 ### Caveats
