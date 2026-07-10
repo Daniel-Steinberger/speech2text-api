@@ -246,6 +246,21 @@ class SpeakerStore:
             cur = c.execute("DELETE FROM speakers WHERE name = ?", (name,))
             return cur.rowcount > 0
 
+    def rename_speaker(self, old_name: str, new_name: str) -> str:
+        """Benennt einen Sprecher um. Gibt 'ok', 'notfound' oder 'conflict' zurück."""
+        with self._conn() as c:
+            row = c.execute("SELECT id FROM speakers WHERE name = ?", (old_name,)).fetchone()
+            if row is None:
+                return "notfound"
+            # Zielname bereits vergeben (COLLATE NOCASE, eigene Zeile ausgenommen)?
+            clash = c.execute(
+                "SELECT 1 FROM speakers WHERE name = ? AND id != ?", (new_name, row[0])
+            ).fetchone()
+            if clash is not None:
+                return "conflict"
+            c.execute("UPDATE speakers SET name = ? WHERE id = ?", (new_name, row[0]))
+            return "ok"
+
     # --- Matching ---
 
     def _reference_embeddings(self) -> list[tuple[str, np.ndarray]]:

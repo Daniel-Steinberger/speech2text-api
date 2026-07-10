@@ -227,6 +227,13 @@ async function loadSpeakers() {
       actions.appendChild(playBtn);
     }
 
+    const renameBtn = document.createElement("button");
+    renameBtn.className = "ghost";
+    renameBtn.textContent = "Umbenennen";
+    renameBtn.style.marginRight = "0.4rem";
+    renameBtn.onclick = () => renameSpeaker(s.name);
+    actions.appendChild(renameBtn);
+
     const delBtn = document.createElement("button");
     delBtn.className = "danger";
     delBtn.textContent = "Löschen";
@@ -263,6 +270,23 @@ async function showSpeakerSamples(name) {
     wrap.querySelectorAll(".play-btn").forEach((btn) => {
       btn.onclick = () => togglePlay(btn);
     });
+  } catch (e) { toast("Fehler: " + e.message, "error"); }
+}
+
+async function renameSpeaker(name) {
+  const newName = prompt(`Neuer Name für „${name}":`, name);
+  if (newName === null) return;
+  const trimmed = newName.trim();
+  if (!trimmed || trimmed === name) return;
+  try {
+    const res = await fetch(`/speakers/${encodeURIComponent(name)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ new_name: trimmed }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    toast(`„${name}" → „${trimmed}" umbenannt`, "success");
+    loadSpeakers();
   } catch (e) { toast("Fehler: " + e.message, "error"); }
 }
 

@@ -178,6 +178,20 @@ def delete_speaker(name: str):
     return {"deleted": name}
 
 
+@app.patch("/speakers/{name}")
+def rename_speaker(name: str, new_name: str = Body(..., embed=True)):
+    new_name = new_name.strip()
+    if not new_name:
+        raise HTTPException(400, "new_name darf nicht leer sein.")
+    store: SpeakerStore = models["store"]
+    result = store.rename_speaker(name, new_name)
+    if result == "notfound":
+        raise HTTPException(404, f"Speaker '{name}' nicht gefunden.")
+    if result == "conflict":
+        raise HTTPException(409, f"Ein Sprecher namens '{new_name}' existiert bereits.")
+    return {"renamed": name, "name": new_name}
+
+
 @app.get("/speakers/{name}/samples")
 def list_speaker_samples(name: str):
     store: SpeakerStore = models["store"]
