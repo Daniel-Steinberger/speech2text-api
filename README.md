@@ -69,7 +69,7 @@ curl http://localhost:8002/health
 Unter `http://<host>:8002/` läuft eine schlanke Web-Oberfläche zum:
 
 - Audio hochladen und Transkript anzeigen / kopieren / als `.md` herunterladen
-- Bekannte Sprecher auflisten und löschen
+- Bekannte Sprecher auflisten, umbenennen und löschen
 - Offene Sitzungen (anonyme Cluster aus letzten Transkriptionen) Namen
   zuweisen — das gespeicherte Embedding wird damit dem Sprecher zugeordnet
   und beim nächsten Transkribieren wieder erkannt
@@ -169,7 +169,12 @@ auftauchen.
 
 ```bash
 curl http://localhost:8002/speakers          # auflisten
-curl -X DELETE http://localhost:8002/speakers/Daniel
+curl -X DELETE http://localhost:8002/speakers/Daniel   # löschen
+
+# umbenennen (Embeddings/Samples bleiben erhalten)
+curl -X PATCH http://localhost:8002/speakers/Daniel \
+  -H "Content-Type: application/json" \
+  -d '{"new_name": "Daniel S."}'
 ```
 
 ### Caveats
