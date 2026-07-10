@@ -47,6 +47,14 @@ Alignment-Modell für die erkannte Sprache dazu.
 
 ## Starten
 
+Bequem per Skript:
+
+```bash
+./serve.sh
+```
+
+`serve.sh` startet lediglich den Server auf Port 8002 — äquivalent zu:
+
 ```bash
 uv run uvicorn main:app --host 0.0.0.0 --port 8002
 ```
