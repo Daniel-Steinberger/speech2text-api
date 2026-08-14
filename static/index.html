@@ -46,7 +46,7 @@
   th, td { text-align: left; padding: 0.55rem 0.5rem; border-bottom: 1px solid var(--border); }
   th { color: var(--muted); font-weight: 500; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; }
   tr:last-child td { border-bottom: none; }
-  input[type=text], input[type=file] {
+  input[type=text], input[type=file], select {
     background: #0c0e13;
     border: 1px solid var(--border);
     color: var(--text);
@@ -54,7 +54,7 @@
     border-radius: 6px;
     font-size: 0.9rem;
   }
-  input[type=text]:focus { outline: none; border-color: var(--accent); }
+  input[type=text]:focus, select:focus { outline: none; border-color: var(--accent); }
   button {
     background: var(--accent);
     color: white;
@@ -90,6 +90,9 @@
     margin-left: 0.3rem; flex: 1; min-width: 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
+  .sample-actions { display: flex; gap: 0.4rem; align-items: center; white-space: nowrap; }
+  .sample-actions button, .sample-actions select { padding: 0.28rem 0.6rem; font-size: 0.8rem; }
+  .no-audio { width: 32px; text-align: center; color: var(--muted); flex: 0 0 32px; }
   .icon-btn {
     background: transparent; border: none; color: var(--muted);
     cursor: pointer; padding: 0.25rem 0.4rem; border-radius: 4px;
@@ -199,8 +202,11 @@ async function loadHealth() {
   } catch (e) { $("health").textContent = "offline"; }
 }
 
+let speakersCache = [];
+
 async function loadSpeakers() {
   const { speakers } = await api("/speakers");
+  speakersCache = speakers;
   const tbody = document.querySelector("#speakers-table tbody");
   tbody.innerHTML = "";
   $("speakers-empty").hidden = speakers.length > 0;
@@ -218,7 +224,7 @@ async function loadSpeakers() {
     `;
     const actions = tr.lastElementChild;
 
-    if (s.samples_with_audio > 0) {
+    if (s.samples > 0) {
       const playBtn = document.createElement("button");
       playBtn.className = "ghost";
       playBtn.textContent = "Samples ▾";
@@ -248,28 +254,153 @@ async function showSpeakerSamples(name) {
   const wrap = $("samples-detail");
   try {
     const data = await api(`/speakers/${encodeURIComponent(name)}/samples`);
-    const audioSamples = data.samples.filter((s) => s.has_audio);
-    if (audioSamples.length === 0) {
-      wrap.innerHTML = `<em style="color:var(--muted)">Keine Audio-Samples für „${escapeHtml(name)}".</em>`;
-      wrap.hidden = false;
+    wrap.innerHTML = "";
+    wrap.hidden = false;
+
+    const head = document.createElement("div");
+    head.style.marginBottom = "0.5rem";
+    head.innerHTML = `<strong>Samples für „${escapeHtml(name)}"</strong>`;
+    const close = document.createElement("button");
+    close.className = "icon-btn";
+    close.textContent = "✕";
+    close.style.float = "right";
+    close.onclick = () => { wrap.hidden = true; };
+    head.appendChild(close);
+    wrap.appendChild(head);
+
+    if (data.samples.length === 0) {
+      const em = document.createElement("em");
+      em.style.color = "var(--muted)";
+      em.textContent = `Keine Samples für „${name}" mehr hinterlegt.`;
+      wrap.appendChild(em);
       return;
     }
-    let html = `<div style="margin-bottom:0.5rem"><strong>Samples für „${escapeHtml(name)}"</strong>
-                <button class="icon-btn" onclick="document.getElementById('samples-detail').hidden=true" style="float:right">✕</button></div>`;
-    html += `<div style="display:flex;flex-direction:column;gap:0.4rem">`;
-    for (const sm of audioSamples) {
-      html += `<div class="cluster-row">
-        <button class="play-btn" data-audio="/speakers/samples/${sm.id}/audio">▶</button>
-        <span style="color:var(--muted);font-size:0.82em;font-family:ui-monospace,monospace">#${sm.id} · ${sm.created_at}</span>
-        <span class="source" style="margin-left:0.5rem">${escapeHtml(sm.source || "")}</span>
-      </div>`;
+
+    const list = document.createElement("div");
+    list.style.cssText = "display:flex;flex-direction:column;gap:0.4rem";
+    for (const sm of data.samples) list.appendChild(buildSampleRow(sm, name));
+    wrap.appendChild(list);
+  } catch (e) { toast("Fehler: " + e.message, "error"); }
+}
+
+function buildSampleRow(sm, speakerName) {
+  const row = document.createElement("div");
+  row.className = "cluster-row";
+
+  if (sm.has_audio) {
+    const play = document.createElement("button");
+    play.className = "play-btn";
+    play.title = "Sample abspielen";
+    play.dataset.audio = `/speakers/samples/${sm.id}/audio`;
+    play.textContent = "▶";
+    play.onclick = () => togglePlay(play);
+    row.appendChild(play);
+  } else {
+    const spacer = document.createElement("span");
+    spacer.className = "no-audio";
+    spacer.title = "Kein Audio hinterlegt";
+    spacer.textContent = "—";
+    row.appendChild(spacer);
+  }
+
+  const meta = document.createElement("span");
+  meta.style.cssText = "color:var(--muted);font-size:0.82em;font-family:ui-monospace,monospace";
+  meta.textContent = `#${sm.id} · ${sm.created_at}`;
+  row.appendChild(meta);
+
+  const src = document.createElement("span");
+  src.className = "source";
+  src.title = sm.source || "";
+  src.textContent = sm.source || "";
+  row.appendChild(src);
+
+  const actions = document.createElement("span");
+  actions.className = "sample-actions";
+  row.appendChild(actions);
+
+  function showButtons() {
+    actions.innerHTML = "";
+    const move = document.createElement("button");
+    move.className = "ghost";
+    move.textContent = "Verschieben";
+    move.title = "Sample einem anderen Sprecher zuordnen";
+    move.onclick = showMoveForm;
+    const del = document.createElement("button");
+    del.className = "danger";
+    del.textContent = "Entfernen";
+    del.title = "Zuordnung samt Embedding löschen";
+    del.onclick = () => deleteSample(sm.id, speakerName);
+    actions.append(move, del);
+  }
+
+  function showMoveForm() {
+    actions.innerHTML = "";
+    const select = document.createElement("select");
+    for (const s of speakersCache) {
+      if (s.name.toLowerCase() === speakerName.toLowerCase()) continue;
+      const opt = document.createElement("option");
+      opt.value = s.name;
+      opt.textContent = s.name;
+      select.appendChild(opt);
     }
-    html += `</div>`;
-    wrap.innerHTML = html;
-    wrap.hidden = false;
-    wrap.querySelectorAll(".play-btn").forEach((btn) => {
-      btn.onclick = () => togglePlay(btn);
+    const newOpt = document.createElement("option");
+    newOpt.value = "__new__";
+    newOpt.textContent = "＋ Neuer Sprecher…";
+    select.appendChild(newOpt);
+
+    const ok = document.createElement("button");
+    ok.textContent = "Zuordnen";
+    ok.onclick = () => {
+      let target = select.value;
+      if (target === "__new__") {
+        const entered = prompt("Name des neuen Sprechers:");
+        if (entered === null) return;
+        target = entered.trim();
+        if (!target) return;
+      }
+      moveSample(sm.id, speakerName, target);
+    };
+    const cancel = document.createElement("button");
+    cancel.className = "ghost";
+    cancel.textContent = "Abbrechen";
+    cancel.onclick = showButtons;
+
+    actions.append(select, ok, cancel);
+    select.focus();
+  }
+
+  showButtons();
+  return row;
+}
+
+async function moveSample(sampleId, fromName, toName) {
+  try {
+    const res = await fetch(`/speakers/samples/${sampleId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: toName }),
     });
+    if (!res.ok) throw new Error(await res.text());
+    const { moved } = await res.json();
+    const hint = moved.from_remaining === 0 ? ` — „${moved.from}" hat jetzt keine Samples mehr` : "";
+    toast(`Sample #${sampleId}: „${moved.from}" → „${moved.to}"${hint}`, "success");
+    await loadSpeakers();
+    await showSpeakerSamples(fromName);
+  } catch (e) { toast("Fehler: " + e.message, "error"); }
+}
+
+async function deleteSample(sampleId, speakerName) {
+  if (!confirm(`Sample #${sampleId} von „${speakerName}" wirklich entfernen?`)) return;
+  try {
+    const res = await fetch(`/speakers/samples/${sampleId}`, { method: "DELETE" });
+    if (!res.ok) throw new Error(await res.text());
+    const { deleted } = await res.json();
+    toast(
+      `Sample #${sampleId} entfernt (${deleted.remaining} verbleibend für „${deleted.speaker}")`,
+      "success",
+    );
+    await loadSpeakers();
+    await showSpeakerSamples(speakerName);
   } catch (e) { toast("Fehler: " + e.message, "error"); }
 }
 

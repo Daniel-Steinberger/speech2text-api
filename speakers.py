@@ -234,6 +234,53 @@ class SpeakerStore:
             for r in rows
         ]
 
+    def move_sample(self, sample_id: int, new_name: str) -> dict | None:
+        """Ordnet ein Sample einem anderen Sprecher zu (legt ihn ggf. an).
+
+        Gibt None zurück, wenn die Sample-ID unbekannt ist, sonst Infos zur
+        Umbuchung inkl. verbleibender Sample-Anzahl beim bisherigen Sprecher.
+        """
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT e.speaker_id, s.name FROM embeddings e "
+                "JOIN speakers s ON s.id = e.speaker_id WHERE e.id = ?",
+                (sample_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            old_id, old_name = row
+            c.execute("INSERT OR IGNORE INTO speakers(name) VALUES (?)", (new_name,))
+            new_row = c.execute("SELECT id, name FROM speakers WHERE name = ?", (new_name,)).fetchone()
+            new_id, canonical_name = new_row
+            if new_id != old_id:
+                c.execute("UPDATE embeddings SET speaker_id = ? WHERE id = ?", (new_id, sample_id))
+            remaining = c.execute(
+                "SELECT COUNT(*) FROM embeddings WHERE speaker_id = ?", (old_id,)
+            ).fetchone()[0]
+            return {
+                "sample_id": sample_id,
+                "from": old_name,
+                "to": canonical_name,
+                "from_remaining": remaining,
+            }
+
+    def delete_sample(self, sample_id: int) -> dict | None:
+        """Entfernt eine Sample-Zuordnung samt Embedding und Audio."""
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT e.speaker_id, s.name FROM embeddings e "
+                "JOIN speakers s ON s.id = e.speaker_id WHERE e.id = ?",
+                (sample_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            speaker_id, name = row
+            c.execute("DELETE FROM embeddings WHERE id = ?", (sample_id,))
+            remaining = c.execute(
+                "SELECT COUNT(*) FROM embeddings WHERE speaker_id = ?", (speaker_id,)
+            ).fetchone()[0]
+            return {"sample_id": sample_id, "speaker": name, "remaining": remaining}
+
     def get_speaker_sample_audio(self, sample_id: int) -> bytes | None:
         with self._conn() as c:
             row = c.execute(

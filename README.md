@@ -177,6 +177,34 @@ curl -X PATCH http://localhost:8002/speakers/Daniel \
   -d '{"new_name": "Daniel S."}'
 ```
 
+### Einzelne Samples korrigieren
+
+Wurde ein Sample versehentlich der falschen Person zugeordnet, lässt es sich
+umbuchen oder ganz entfernen — ohne den ganzen Sprecher zu löschen. Die
+Sample-IDs liefert die Sample-Liste, in der Web-UI stehen dieselben Aktionen
+unter „Samples ▾" bei jedem Sprecher:
+
+```bash
+# Samples eines Sprechers auflisten (id, created_at, source, has_audio)
+curl http://localhost:8002/speakers/Daniel/samples
+
+# Sample abspielen / herunterladen (Opus)
+curl http://localhost:8002/speakers/samples/42/audio -o sample42.ogg
+
+# Sample einem anderen Sprecher zuordnen (Zielname wird bei Bedarf angelegt)
+curl -X PATCH http://localhost:8002/speakers/samples/42 \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Anna"}'
+
+# Zuordnung samt Embedding und Audio entfernen
+curl -X DELETE http://localhost:8002/speakers/samples/42
+```
+
+Beide Antworten enthalten die verbleibende Sample-Anzahl beim bisherigen
+Sprecher. Fällt sie auf 0, bleibt der Sprecher als leerer Eintrag bestehen
+(er matcht dann nichts mehr) — bei Bedarf mit `DELETE /speakers/{name}`
+entfernen.
+
 ### Caveats
 
 - **Sample-Länge**: Enrollment-Samples ≥ 5 s sauberer Sprache, je mehr desto

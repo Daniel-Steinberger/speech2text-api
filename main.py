@@ -207,6 +207,29 @@ def get_speaker_sample_audio(sample_id: int):
     return Response(content=blob, media_type="audio/ogg")
 
 
+@app.patch("/speakers/samples/{sample_id}")
+def move_speaker_sample(sample_id: int, name: str = Body(..., embed=True)):
+    """Ordnet ein Sample einem anderen Sprecher zu (legt ihn bei Bedarf an)."""
+    name = name.strip()
+    if not name:
+        raise HTTPException(400, "name darf nicht leer sein.")
+    store: SpeakerStore = models["store"]
+    result = store.move_sample(sample_id, name)
+    if result is None:
+        raise HTTPException(404, f"Sample #{sample_id} nicht gefunden.")
+    return {"moved": result}
+
+
+@app.delete("/speakers/samples/{sample_id}")
+def delete_speaker_sample(sample_id: int):
+    """Entfernt die Zuordnung eines Samples samt Embedding und Audio."""
+    store: SpeakerStore = models["store"]
+    result = store.delete_sample(sample_id)
+    if result is None:
+        raise HTTPException(404, f"Sample #{sample_id} nicht gefunden.")
+    return {"deleted": result}
+
+
 @app.get("/sessions/pending")
 def list_pending_sessions(unassigned_only: bool = True, limit: int = 50):
     store: SpeakerStore = models["store"]
