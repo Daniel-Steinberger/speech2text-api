@@ -124,6 +124,48 @@ curl -X POST http://localhost:8002/transcribe \
 | `max_speakers` | —              | Maximalanzahl Sprecher                         |
 | `format`       | `md`           | `md`, `txt` oder `json`                        |
 
+### OpenAI-kompatibler Endpunkt (Diktier-Clients)
+
+Für Clients, die einen „OpenAI-kompatiblen" Transkriptions-Endpunkt erwarten
+(z. B. [rhisper](https://github.com/lv10/rhisper), whisper.cpp-Frontends):
+
+```bash
+curl -X POST http://localhost:8002/v1/audio/transcriptions \
+  -H "Authorization: Bearer egal" \
+  -F "file=@diktat.wav" -F "language=de" -F "model=whisper-1"
+# {"text":"Der erkannte Satz."}
+```
+
+Hier läuft **ausschließlich die Spracherkennung** — kein Alignment, keine
+Diarization, keine Sprecher-Embeddings, kein Session-Eintrag. Das ist der
+Unterschied der Anwendungsfälle: `/transcribe` beantwortet „wer hat wann was
+gesagt" für Meetings, dieser Endpunkt „welcher Satz war das" für ein Diktat
+von wenigen Sekunden.
+
+| Feld              | Default          | Beschreibung                                    |
+| ----------------- | ---------------- | ----------------------------------------------- |
+| `file`            | —                | Audiodatei                                       |
+| `language`        | `DEFAULT_LANGUAGE` | ISO-Code; leer = Auto-Detect                   |
+| `prompt`          | —                | wird als `initial_prompt` durchgereicht          |
+| `response_format` | `json`           | `json` (`{"text": …}`) oder `text`               |
+| `model`           | —                | akzeptiert, aber **ignoriert**: der Server hält genau ein Modell geladen |
+| `temperature`     | —                | akzeptiert, aber ignoriert                       |
+
+Der `Authorization`-Header wird nicht ausgewertet (der Server hat generell
+keine Authentifizierung) — manche Clients senden aber zwingend einen, und
+dann stört er nicht.
+
+**rhisper konfigurieren** (`~/.config/rhisper/rhisperrc`):
+
+```
+provider     : "custom"
+api-base-url : "http://<host>:8002/v1"
+model        : "whisper-1"
+language     : "de"
+```
+Dazu `RHISPER_API_KEY` in `~/.env` auf einen beliebigen nicht-leeren Wert
+setzen — rhisper verweigert den Start mit leerem Key, der Server ignoriert ihn.
+
 ## Sprecher-Wiedererkennung über Sitzungen hinweg
 
 pyannote-Diarization vergibt **anonyme Labels** (`SPEAKER_00`, `SPEAKER_01`)
