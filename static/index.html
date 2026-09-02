@@ -90,6 +90,11 @@
     margin-left: 0.3rem; flex: 1; min-width: 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
+  .badge {
+    font-size: 0.72rem; padding: 0.1rem 0.45rem; border-radius: 999px;
+    border: 1px solid var(--border); color: var(--muted); white-space: nowrap;
+  }
+  .badge.matched { color: var(--accent); border-color: var(--accent); }
   .sample-actions { display: flex; gap: 0.4rem; align-items: center; white-space: nowrap; }
   .sample-actions button, .sample-actions select { padding: 0.28rem 0.6rem; font-size: 0.8rem; }
   .no-audio { width: 32px; text-align: center; color: var(--muted); flex: 0 0 32px; }
@@ -157,6 +162,9 @@
   <section>
     <h2>Offene Sitzungen</h2>
     <div class="desc">Cluster aus Transkriptionen, die noch keinem bekannten Sprecher zugeordnet sind. Trage einen Namen ein und klicke „Zuweisen", um die Stimme zukünftig automatisch zu erkennen.</div>
+    <label class="row" style="margin-bottom:0.75rem;color:var(--muted);font-size:0.85rem;cursor:pointer">
+      <input type="checkbox" id="show-matched"> Auch bereits erkannte Sprecher anzeigen (zum Korrigieren von Fehlerkennungen)
+    </label>
     <div id="sessions-list"></div>
     <div class="empty" id="sessions-empty" hidden>Keine offenen Sitzungen.</div>
   </section>
@@ -432,9 +440,17 @@ async function deleteSpeaker(name) {
 }
 
 async function loadSessions() {
-  const { sessions } = await api("/sessions/pending?unassigned_only=true&limit=50");
+  const showMatched = $("show-matched").checked;
+  // Mit erkannten Clustern sind es deutlich mehr Sitzungen, und gerade die alten
+  // sind beim Korrigieren interessant. Sortiert wird nach created_at DESC.
+  const { sessions } = await api(
+    `/sessions/pending?unassigned_only=${!showMatched}&limit=${showMatched ? 500 : 50}`
+  );
   const wrap = $("sessions-list");
   wrap.innerHTML = "";
+  $("sessions-empty").textContent = showMatched
+    ? "Keine Sitzungen gespeichert."
+    : "Keine offenen Sitzungen. Aktiviere die Checkbox, um auch erkannte Sprecher zu sehen.";
   $("sessions-empty").hidden = sessions.length > 0;
   for (const s of sessions) {
     const card = document.createElement("div");
@@ -455,10 +471,21 @@ async function loadSessions() {
         ? `<button class="play-btn" title="Sample abspielen" data-audio="/sessions/${s.session_id}/clusters/${encodeURIComponent(cl.label)}/audio">▶</button>`
         : `<button class="play-btn" disabled title="Kein Sample verfügbar">▶</button>`;
       const sourceText = formatSource(s.source_filename, cl.first_start, cl.last_end);
+      // Bereits erkannte Cluster: zeigen, als wer sie erkannt wurden, und ob daraus
+      // schon ein kuratiertes Sample beim Sprecher liegt.
+      let badge = "";
+      if (cl.matched_name) {
+        badge = `<span class="badge matched" title="Automatisch über das Embedding erkannt">erkannt: ${escapeHtml(cl.matched_name)}</span>`;
+      }
+      if (cl.sample_id) {
+        badge += `<span class="badge" title="Aus diesem Cluster wurde bereits Sample #${cl.sample_id} bei ${escapeHtml(cl.sample_speaker || "?")} angelegt">Sample #${cl.sample_id}</span>`;
+      }
+      const placeholder = cl.matched_name ? "Korrektur…" : "Name…";
       row.innerHTML = `
         ${playBtn}
         <span class="label">${escapeHtml(cl.label)}</span>
-        <input type="text" placeholder="Name…" data-label="${escapeHtml(cl.label)}">
+        ${badge}
+        <input type="text" placeholder="${placeholder}" data-label="${escapeHtml(cl.label)}">
         <span class="source" title="${escapeHtml(sourceText)}">${escapeHtml(sourceText)}</span>
         <button class="icon-btn" title="Cluster verwerfen">✕</button>
       `;
@@ -638,6 +665,8 @@ $("enroll-form").addEventListener("submit", async (ev) => {
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
+
+$("show-matched").onchange = () => loadSessions();
 
 loadHealth();
 loadSpeakers();

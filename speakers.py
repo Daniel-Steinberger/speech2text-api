@@ -396,11 +396,25 @@ class SpeakerStore:
                 vec_blob, audio_blob = row
                 c.execute("INSERT OR IGNORE INTO speakers(name) VALUES (?)", (name,))
                 sid = c.execute("SELECT id FROM speakers WHERE name = ?", (name,)).fetchone()[0]
-                c.execute(
-                    "INSERT INTO embeddings(speaker_id, vector, audio_sample, source) "
-                    "VALUES (?, ?, ?, ?)",
-                    (sid, vec_blob, audio_blob, f"session:{session_id}:{label}"),
-                )
+                source = f"session:{session_id}:{label}"
+                # Wurde dieser Cluster schon einmal zugewiesen, das Sample umbuchen
+                # statt ein zweites anzulegen. Sonst entstehen beim Korrigieren
+                # einer Fehlerkennung Duplikate, die den Referenzvektor verzerren.
+                existing = c.execute(
+                    "SELECT id FROM embeddings WHERE source = ?", (source,)
+                ).fetchone()
+                if existing:
+                    c.execute(
+                        "UPDATE embeddings SET speaker_id = ?, vector = ?, audio_sample = ? "
+                        "WHERE id = ?",
+                        (sid, vec_blob, audio_blob, existing[0]),
+                    )
+                else:
+                    c.execute(
+                        "INSERT INTO embeddings(speaker_id, vector, audio_sample, source) "
+                        "VALUES (?, ?, ?, ?)",
+                        (sid, vec_blob, audio_blob, source),
+                    )
                 c.execute(
                     "UPDATE pending_clusters SET matched_name = ? "
                     "WHERE session_id = ? AND cluster_label = ?",
@@ -411,16 +425,20 @@ class SpeakerStore:
 
     def list_pending(self, unassigned_only: bool = True, limit: int = 50) -> list[dict]:
         """Offene Sitzungen mit ihren Cluster-Labels, gruppiert nach session_id."""
-        where = "WHERE matched_name IS NULL" if unassigned_only else ""
+        where = "WHERE p.matched_name IS NULL" if unassigned_only else ""
         with self._conn() as c:
             rows = c.execute(
-                f"SELECT session_id, cluster_label, matched_name, created_at, "
-                f"  (audio_sample IS NOT NULL) AS has_audio, "
-                f"  source_filename, first_start, last_end "
-                f"FROM pending_clusters {where} ORDER BY created_at DESC, session_id, cluster_label"
+                f"SELECT p.session_id, p.cluster_label, p.matched_name, p.created_at, "
+                f"  (p.audio_sample IS NOT NULL) AS has_audio, "
+                f"  p.source_filename, p.first_start, p.last_end, e.id, sp.name "
+                f"FROM pending_clusters p "
+                f"LEFT JOIN embeddings e "
+                f"  ON e.source = 'session:' || p.session_id || ':' || p.cluster_label "
+                f"LEFT JOIN speakers sp ON sp.id = e.speaker_id "
+                f"{where} ORDER BY p.created_at DESC, p.session_id, p.cluster_label"
             ).fetchall()
         sessions: dict[str, dict] = {}
-        for sid, label, matched, created, has_audio, src, fstart, lend in rows:
+        for sid, label, matched, created, has_audio, src, fstart, lend, samp_id, samp_name in rows:
             s = sessions.setdefault(
                 sid,
                 {"session_id": sid, "created_at": created, "source_filename": src, "clusters": []},
@@ -431,6 +449,9 @@ class SpeakerStore:
                 "has_audio": bool(has_audio),
                 "first_start": fstart,
                 "last_end": lend,
+                # Wurde aus diesem Cluster bereits ein kuratiertes Sample?
+                "sample_id": samp_id,
+                "sample_speaker": samp_name,
             })
         return list(sessions.values())[:limit]
 

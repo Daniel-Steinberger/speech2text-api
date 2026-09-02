@@ -205,6 +205,38 @@ Sprecher. Fällt sie auf 0, bleibt der Sprecher als leerer Eintrag bestehen
 (er matcht dann nichts mehr) — bei Bedarf mit `DELETE /speakers/{name}`
 entfernen.
 
+### Fehlerkennungen korrigieren
+
+Jede Transkription legt **alle** Cluster ab, auch die automatisch erkannten, samt
+Embedding und 15 Sekunden Audio. Wurde also der falsche Sprecher erkannt, liegt das
+Material weiterhin vor und die Zuordnung lässt sich nachträglich richtigstellen:
+
+```bash
+# auch bereits erkannte Cluster anzeigen (Default ist true, also nur offene)
+curl "http://localhost:8002/sessions/pending?unassigned_only=false&limit=50"
+```
+
+Pro Cluster liefert die Antwort `matched_name` (als wer erkannt wurde), `has_audio`
+sowie `sample_id` und `sample_speaker`, falls aus dem Cluster bereits ein kuratiertes
+Sample beim Sprecher entstanden ist. Die Korrektur läuft über den vorhandenen
+Zuweisungs-Endpunkt, der auch auf erkannte Cluster wirkt:
+
+```bash
+curl -X POST http://localhost:8002/sessions/$SESSION/assign \
+  -H "Content-Type: application/json" \
+  -d '{"SPEAKER_01": "Anna"}'
+```
+
+Mehrfaches Zuweisen desselben Clusters erzeugt **kein** zweites Sample, sondern bucht
+das vorhandene um. In der Web-UI schaltet die Checkbox „Auch bereits erkannte Sprecher
+anzeigen" die erkannten Cluster frei, jeweils mit Badge, Abspielknopf und Eingabefeld
+für die Korrektur.
+
+Automatisch erkannte Cluster werden bewusst **nicht** von selbst als Sample beim
+Sprecher gespeichert. Da `_reference_embeddings()` den Mittelwert je Sprecher bildet,
+würde sich eine Fehlerkennung sonst selbst verstärken. Ein Sample entsteht erst durch
+eine ausdrückliche Zuweisung.
+
 ### Caveats
 
 - **Sample-Länge**: Enrollment-Samples ≥ 5 s sauberer Sprache, je mehr desto

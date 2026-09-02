@@ -1,6 +1,6 @@
 [project]
 name = "speech2text-api"
-version = "0.2.0"
+version = "0.3.0"
 description = "FastAPI für Audio-Upload → Transkript mit Sprechererkennung (WhisperX) auf lokaler GPU"
 requires-python = ">=3.11,<3.13"
 dependencies = [
