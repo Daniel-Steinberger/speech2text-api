@@ -1,7 +1,9 @@
+import dataclasses
 import gc
 import os
 import tempfile
-from contextlib import asynccontextmanager
+import threading
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Literal
 
@@ -109,6 +111,52 @@ def _to_text(segments: list[dict]) -> str:
     return "".join(out).strip() + "\n"
 
 
+async def _save_upload(file: UploadFile) -> str:
+    """Legt den Upload als temporäre Datei ab und gibt deren Pfad zurück.
+
+    Der Aufrufer ist fürs Aufräumen zuständig (``finally: os.unlink(...)``) —
+    ``delete=False`` ist nötig, weil whisperx die Datei über ffmpeg erneut
+    öffnet, nachdem der Python-Handle geschlossen wurde.
+    """
+    if not file.filename:
+        raise HTTPException(400, "Keine Datei übergeben.")
+    suffix = Path(file.filename).suffix or ".audio"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(await file.read())
+        return tmp.name
+
+
+# Serialisiert Zugriffe auf das ASR-Modell. Nötig, weil ein Prompt nur über
+# das gemeinsame options-Objekt der Pipeline gesetzt werden kann
+# (FasterWhisperPipeline.transcribe nimmt keinen initial_prompt entgegen) -
+# zwei gleichzeitige Requests würden sich sonst gegenseitig den Prompt
+# unterschieben. Die GPU arbeitet ohnehin seriell, der Lock kostet also
+# keinen Durchsatz.
+_asr_lock = threading.Lock()
+
+
+@contextmanager
+def _asr_with_prompt(prompt: str | None):
+    """Hält den ASR-Lock und setzt für dessen Dauer einen initial_prompt."""
+    pipeline = models["asr"]
+    with _asr_lock:
+        if not prompt:
+            yield pipeline
+            return
+
+        original = pipeline.options
+        try:
+            if dataclasses.is_dataclass(original):
+                pipeline.options = dataclasses.replace(original, initial_prompt=prompt)
+            elif hasattr(original, "_replace"):  # NamedTuple (ältere faster-whisper)
+                pipeline.options = original._replace(initial_prompt=prompt)
+            else:
+                print("[warn] initial_prompt wird von dieser faster-whisper-Version nicht unterstützt")
+            yield pipeline
+        finally:
+            pipeline.options = original
+
+
 @app.get("/health")
 def health() -> dict:
     return {
@@ -137,13 +185,8 @@ async def enroll_speaker(
     name = name.strip()
     if not name:
         raise HTTPException(400, "name darf nicht leer sein.")
-    if not file.filename:
-        raise HTTPException(400, "Keine Datei übergeben.")
 
-    suffix = Path(file.filename).suffix or ".audio"
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(await file.read())
-        audio_path = tmp.name
+    audio_path = await _save_upload(file)
     try:
         audio = whisperx.load_audio(audio_path)
         if len(audio) < 16000 * 1.5:
@@ -267,6 +310,59 @@ def assign_session(session_id: str, mapping: dict[str, str] = Body(...)):
 
 # --- Transkription ---
 
+@app.post("/v1/audio/transcriptions")
+async def openai_transcriptions(
+    file: UploadFile = File(...),
+    model: str = Form(default=WHISPER_MODEL),
+    language: str | None = Form(default=None),
+    prompt: str | None = Form(default=None),
+    response_format: Literal["json", "text"] = Form(default="json"),
+    temperature: float = Form(default=0.0),
+):
+    """Transkribiert eine Aufnahme im Schema von OpenAIs /audio/transcriptions.
+
+    Gedacht für Diktier-Clients (rhisper, whisper.cpp-Frontends, alles was
+    einen "OpenAI-kompatiblen Endpoint" erwartet): ein Sprecher, wenige
+    Sekunden Audio, gebraucht wird nur der fertige Text.
+
+    Deshalb läuft hier **ausschließlich** die Spracherkennung — kein
+    Forced Alignment, keine Diarization, keine Sprecher-Embeddings, kein
+    Session-Eintrag. Das ist keine Sparmaßnahme, sondern der Unterschied
+    zwischen den Anwendungsfällen: /transcribe beantwortet "wer hat wann was
+    gesagt" für Meetings, dieser Endpunkt "welcher Satz war das".
+
+    Abweichungen vom Original-Schema:
+    - ``model`` wird entgegengenommen, aber ignoriert - der Server hält genau
+      ein Modell geladen (``WHISPER_MODEL``). Es steht in der Antwort auf
+      /health und wird hier nur akzeptiert, weil Clients das Feld senden.
+    - ``temperature`` wird ignoriert.
+    - ``response_format`` kennt nur ``json`` und ``text`` (kein srt/vtt/
+      verbose_json).
+    """
+    audio_path = await _save_upload(file)
+
+    try:
+        audio = whisperx.load_audio(audio_path)
+
+        with _asr_with_prompt(prompt) as asr:
+            asr_result = asr.transcribe(
+                audio,
+                batch_size=BATCH_SIZE,
+                language=language or DEFAULT_LANGUAGE,
+            )
+
+        text = " ".join(seg["text"].strip() for seg in asr_result["segments"]).strip()
+
+        if response_format == "text":
+            return PlainTextResponse(text, media_type="text/plain; charset=utf-8")
+        return JSONResponse({"text": text})
+    finally:
+        try:
+            os.unlink(audio_path)
+        except OSError:
+            pass
+
+
 @app.post("/transcribe")
 async def transcribe(
     file: UploadFile = File(...),
@@ -275,13 +371,7 @@ async def transcribe(
     max_speakers: int | None = Form(default=None),
     format: Literal["md", "txt", "json"] = Form(default="md"),
 ):
-    if not file.filename:
-        raise HTTPException(400, "Keine Datei übergeben.")
-
-    suffix = Path(file.filename).suffix or ".audio"
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(await file.read())
-        audio_path = tmp.name
+    audio_path = await _save_upload(file)
 
     try:
         audio = whisperx.load_audio(audio_path)
