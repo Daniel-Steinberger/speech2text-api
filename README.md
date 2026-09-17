@@ -328,3 +328,10 @@ Danke, freut mich hier zu sein.
   Für lange Dateien Client-Timeout entsprechend hochsetzen.
 - VRAM-Bedarf liegt bei `large-v3` + `float16` + Diarization typischerweise
   bei ca. 8–10 GB — auf der 5090 (32 GB) entspannt.
+- Nach jedem `/transcribe` gibt der Server PyTorchs VRAM-Cache frei. Auf
+  knapperen Karten (12 GB) scheiterte sonst erst die *zweite* Datei mit
+  `CUDA failed with error out of memory`. Grund sind zwei getrennte
+  Allocatoren, die sich den Speicher nicht gegenseitig zurückgeben:
+  Alignment und Diarization laufen über PyTorch, die Spracherkennung
+  über CTranslate2. Reicht es weiterhin nicht, `BATCH_SIZE` senken
+  (8 oder 4).

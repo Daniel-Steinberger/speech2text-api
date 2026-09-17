@@ -7,6 +7,11 @@ from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Literal
 
+# Muss vor dem torch-Import stehen: PyTorch liest die Allocator-Konfiguration
+# beim ersten CUDA-Zugriff. "expandable_segments" verhindert, dass der Cache
+# in unbrauchbar kleine Blöcke zerfällt, die CTranslate2 nicht nutzen kann.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 import torch
 import whisperx
 from whisperx.diarize import DiarizationPipeline
@@ -29,6 +34,21 @@ SPEAKER_DB = os.getenv("SPEAKER_DB", "speakers.db")
 MATCH_THRESHOLD = float(os.getenv("MATCH_THRESHOLD", "0.50"))
 
 models: dict = {}
+
+
+def _release_gpu_memory() -> None:
+    """Gibt von PyTorch reservierte VRAM-Blöcke ans Gerät zurück.
+
+    faster-whisper läuft über CTranslate2 und damit auf einem eigenen
+    Allocator — es kann PyTorchs Cache nicht mitbenutzen. Alignment,
+    Diarization und Embedding hinterlassen dort aber belegte Blöcke, die
+    beim nächsten Durchlauf der Spracherkennung fehlen: die erste Datei
+    läuft durch, die zweite stirbt mit "CUDA failed with error out of
+    memory". Deshalb nach jedem Request aufräumen, nicht erst beim Beenden.
+    """
+    gc.collect()
+    if DEVICE == "cuda":
+        torch.cuda.empty_cache()
 
 
 @asynccontextmanager
@@ -54,9 +74,7 @@ async def lifespan(_: FastAPI):
     print("[startup] Bereit.")
     yield
     models.clear()
-    gc.collect()
-    if DEVICE == "cuda":
-        torch.cuda.empty_cache()
+    _release_gpu_memory()
 
 
 app = FastAPI(title="speech2text-api", lifespan=lifespan)
@@ -395,9 +413,7 @@ async def transcribe(
             return_char_alignments=False,
         )
         del align_model
-        gc.collect()
-        if DEVICE == "cuda":
-            torch.cuda.empty_cache()
+        _release_gpu_memory()
 
         diarize_segments = models["diarize"](
             audio,
@@ -480,6 +496,7 @@ async def transcribe(
             headers=headers,
         )
     finally:
+        _release_gpu_memory()
         try:
             os.unlink(audio_path)
         except OSError:
